@@ -5,3 +5,6 @@
 /.vs
 /bin/Debug
 /obj/Debug
+/bin/Release
+/obj/Release
+/FileHistoryCopy.csproj.user
