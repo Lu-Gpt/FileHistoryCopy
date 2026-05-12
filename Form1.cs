@@ -16,6 +16,9 @@ namespace FileHistoryCopy
 {
     public partial class Form1 : Form
     {
+        private static readonly Regex FileNameRegex = new Regex(@"\s\((?<timestamp>\d{4}_\d{2}_\d{2}\s\d{2}_\d{2}_\d{2})\sUTC\)$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
         public Form1()
         {
             InitializeComponent();
@@ -25,7 +28,8 @@ namespace FileHistoryCopy
         {
             this.Icon = Properties.Resources.icon;
 
-            textBox1.Text = "E:\\FileHistory\\user";
+            textBox1.Text = Properties.Settings.Default.LastDirectory;
+            //textBox1.Text = "E:\\FileHistory\\user";
             textBox2.Text = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
             textBox3.Text = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
             textBox4.Text = "E:\\FileHistory\\user\\DESKTOP-XXXXXX\\Data\\C\\Users\\user\\file.txt";
@@ -36,10 +40,16 @@ namespace FileHistoryCopy
         #region Directory
         private void button1_Click(object sender, EventArgs e)
         {
+            if (Directory.Exists(Properties.Settings.Default.LastDirectory))
+            {
+                folderBrowserDialog1.SelectedPath = Properties.Settings.Default.LastDirectory;
+            }
             if (folderBrowserDialog1.ShowDialog() == DialogResult.OK)
             {
                 string path = folderBrowserDialog1.SelectedPath;
                 textBox1.Text = path;
+                Properties.Settings.Default.LastDirectory = textBox1.Text;
+                Properties.Settings.Default.Save();
             }
             else
             {
@@ -58,18 +68,22 @@ namespace FileHistoryCopy
                 MessageBox.Show("請指定Folder路徑!");
             }
         }
-        private void button2_Click(object sender, EventArgs e)
+        private async void button2_Click(object sender, EventArgs e)
         {
             if (textBox1.Text != string.Empty && Directory.Exists(textBox1.Text) &&
                 textBox2.Text != string.Empty && Directory.Exists(textBox2.Text))
             {
+                Cursor.Current = Cursors.WaitCursor;
+                toolStripStatusLabel1.Text = "runing..";
+                toolStripProgressBar1.Visible = true;
+                toolStripProgressBar1.Style = ProgressBarStyle.Marquee;
                 IEnumerable<string> d1 = Directory.EnumerateFiles(textBox1.Text, "*", SearchOption.AllDirectories);
 
                 var latestFiles = GetFileList(d1).GroupBy(f => f)
                                     .Select(g => g.OrderByDescending(f => f.TimeStamp).First())
                                     .ToList();
 
-                #region
+                #region 1.0
                 /*
                 // 1. 這是你當初掃描的起始點 (備份來源的根目錄)
                 string backupRoot = textBox1.Text;
@@ -104,19 +118,8 @@ namespace FileHistoryCopy
                 }
                 */
                 #endregion
-                #region
-                // 1. 這是你當初掃描的起始點 (備份來源的根目錄)
-                string backupRoot = textBox1.Text.TrimEnd(Path.DirectorySeparatorChar);
-                string destinationRoot = textBox2.Text;
-
-                // 1. 確保目標資料夾內包含來源資料夾的名稱
-                string backupDirName = Path.GetFileName(backupRoot);
-                if (!destinationRoot.TrimEnd(Path.DirectorySeparatorChar).EndsWith(backupDirName, StringComparison.OrdinalIgnoreCase))
-                {
-                    destinationRoot = Path.Combine(destinationRoot, backupDirName);
-                }
-
-                richTextBox1.Text +=  Environment.NewLine;
+                #region 2.0
+                /*
                 foreach (FileDetail fd in latestFiles)
                 {
                     // 2. 用長度擷取相對路徑，比 Replace 更安全
@@ -138,8 +141,48 @@ namespace FileHistoryCopy
                     File.Copy(fd.FullFileName, destinationPath, true);
                     richTextBox1.Text += $"{destinationPath},Size:{fd.FileLength}Byte" + Environment.NewLine;
                 }
+                */
+                #endregion
+                #region 3.0
+                // 1. 這是你當初掃描的起始點 (備份來源的根目錄)
+                string backupRoot = textBox1.Text.TrimEnd(Path.DirectorySeparatorChar);
+                string destinationRoot = textBox2.Text;
+
+                // 1. 確保目標資料夾內包含來源資料夾的名稱
+                string backupDirName = Path.GetFileName(backupRoot);
+                if (!destinationRoot.TrimEnd(Path.DirectorySeparatorChar).EndsWith(backupDirName, StringComparison.OrdinalIgnoreCase))
+                {
+                    destinationRoot = Path.Combine(destinationRoot, backupDirName);
+                }
+
+                richTextBox1.Text +=  Environment.NewLine;
+
+                await Task.Run(() => //不阻塞UI線程繪製,所以另開任務來跑
+                {
+                    Parallel.ForEach(latestFiles, new ParallelOptions() { MaxDegreeOfParallelism = 2 }, fd =>
+                    {
+                        // 2. 用長度擷取相對路徑，比 Replace 更安全
+                        string relativeDir = fd.DirectoryPath.Length > backupRoot.Length
+                                             ? fd.DirectoryPath.Substring(backupRoot.Length).TrimStart(Path.DirectorySeparatorChar)
+                                             : "";
+
+                        // 3. 組合目標資料夾
+                        string targetFolder = Path.Combine(destinationRoot, relativeDir);
+
+                        // 4. 建立資料夾
+                        Directory.CreateDirectory(targetFolder);
+
+                        // 5. 複製檔案
+                        string destinationPath = Path.Combine(targetFolder, fd.FileName);
+                        File.Copy(fd.FullFileName, destinationPath, true);
+                        //richTextBox1.AppendText($"{destinationPath},Size:{fd.FileLength}Byte" + Environment.NewLine);
+                    });
+                });
                 #endregion
                 MessageBox.Show("success");
+                Cursor.Current = Cursors.Default;
+                toolStripStatusLabel1.Text = "Ready";
+                toolStripProgressBar1.Visible = false;
             }
             else
             {
@@ -179,6 +222,7 @@ namespace FileHistoryCopy
             if (textBox3.Text != string.Empty && Directory.Exists(textBox3.Text) &&
                 textBox4.Text != string.Empty && File.Exists(textBox4.Text))
             {
+                Cursor.Current = Cursors.WaitCursor;
                 IEnumerable<string> f1 = new string[] { textBox4.Text };
                 var ff = GetFileList(f1).FirstOrDefault();
                 if(ff != null)
@@ -192,6 +236,7 @@ namespace FileHistoryCopy
                 {
                     MessageBox.Show("error");
                 }
+                Cursor.Current = Cursors.Default;
             }
             else
             {
@@ -199,8 +244,10 @@ namespace FileHistoryCopy
             }
         }
         #endregion
-        private IEnumerable<FileDetail> GetFileList(IEnumerable<string> pathlist)
+        private IEnumerable<FileDetail> GetFileList(IEnumerable<string> pathList)
         {
+            #region 1.0
+            /*
             if (pathlist != null && pathlist.Any())
             {
                 List<FileDetail> list = new List<FileDetail>();
@@ -239,6 +286,48 @@ namespace FileHistoryCopy
                 return list;
             }
             return Enumerable.Empty<FileDetail>();
+            */
+            #endregion
+            #region 3.0
+            if (pathList == null)
+                return Enumerable.Empty<FileDetail>();
+
+            var result = new List<FileDetail>();
+
+            foreach (var path in pathList)
+            {
+                if (!File.Exists(path))
+                    continue;
+
+                var fileInfo = new FileInfo(path);
+
+                FileDetail fd = new FileDetail
+                {
+                    FullFileName = fileInfo.FullName,
+                    FileLength = fileInfo.Length,
+                    LastWriteTime = fileInfo.LastWriteTimeUtc
+                };
+
+                string fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileInfo.Name);
+                Match match = FileNameRegex.Match(fileNameWithoutExt);
+
+                if (match.Success)
+                {
+                    string rawTimestamp = match.Groups["timestamp"].Value;
+                    //須注意Kind要是UTC無偏移
+                    fd.TimeStamp = DateTime.ParseExact(rawTimestamp,"yyyy_MM_dd HH_mm_ss",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
+
+                    string cleanMainName = FileNameRegex.Replace(fileNameWithoutExt, "");
+                    fd.FileName = cleanMainName + fileInfo.Extension;
+
+                    result.Add(fd);
+                }
+            }
+
+            return result;
+            #endregion
         }
     }
 }
